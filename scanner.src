@@ -1,0 +1,1517 @@
+// ============================================================================
+// Scanner - Lightweight Port Scanner & Exploit Tester
+// ============================================================================
+// Scans ports on a target IP, discovers exploits, and classifies results
+// as shell, computer, or file objects.
+// Usage: scanner <ip> [-r] [-q]
+//
+// Options:
+//   <ip>     Target IP address
+//   -r       Scan random public IP
+//   -q       Quick scan (skip exploit testing, just show ports)
+//
+// ============================================================================
+// HELPERS
+// ============================================================================
+green=function(t);return "<color=#0f0>"+t+"</color>";end function
+red=function(t);return "<color=#f00>"+t+"</color>";end function
+blue=function(t);return "<color=#00f>"+t+"</color>";end function
+yellow=function(t);return "<color=#ff0>"+t+"</color>";end function
+white=function(t);return "<color=#fff>"+t+"</color>";end function
+orange=function(t);return "<color=#ffa500>"+t+"</color>";end function
+purple=function(t);return "<color=#800080>"+t+"</color>";end function
+lime=function(t);return "<color=#0f0>"+t+"</color>";end function
+grey=function(t);return "<color=#888>"+t+"</color>";end function
+liteGrey=function(t);return "<color=#aaa>"+t+"</color>";end function
+error=function(t);return "<color=#f44>"+t+"</color>";end function
+ljust=function(text,width)
+  if len(text)>=width then return text
+  return text+(" "*(width-len(text)))
+end function
+cbool=function(v)
+  if v then return green("True") else return red("False")
+end function
+getUserEX=function(x)
+  root=toRoot(x)
+  if not root then return "guest"
+  for f in get_folders(root)
+    if name(f)=="root" and has_permission(f,"w") and has_permission(f,"r") and has_permission(f,"x") then return "root"
+    if name(f)=="home" then
+      g=null
+      for h in get_folders(f)
+        if name(h)=="guest" then
+          g=h
+          continue
+        end if
+        if has_permission(h,"w") and has_permission(h,"r") and has_permission(h,"x") then return name(h)
+      end for
+      if g then return "guest"
+      break
+    end if
+  end for
+  return "guest"
+end function
+toRoot=function(x)
+  obj=typeof(x)
+  if obj=="computer" then return File(x,"/")
+  if indexOf(obj,"shell")!=null then return File(host_computer(x),"/")
+  if obj=="file" then
+    f=x
+    while parent(f);f=parent(f);end while
+    return f
+  end if
+  return null
+end function
+getAllFiles=function(root)
+  l=[]
+  _=function(f)
+    for z in get_files(f);push(l,z);end for
+    for d in get_folders(f)
+      if is_symlink(d) then continue
+      push(l,d)
+      _(d)
+    end for
+  end function
+  _(root)
+  return l
+end function
+getFileEx=function(x,p)
+  obj=typeof(x)
+  if obj=="computer" then return File(x,p)
+  if indexOf(obj,"shell")!=null then return File(host_computer(x),p)
+  if obj=="file" then
+    root=toRoot(x)
+    if not root then return null
+    for f in getAllFiles(root)
+      if path(f)==p then return f
+    end for
+  end if
+  return null
+end function
+printPasswd=function(passwdFile)
+  content=get_content(passwdFile)
+  if not content then
+    print yellow("[i] passwd file is empty")
+    return []
+  end if
+  // Parse entries
+  entries=[]
+  for line in split(content,char(10))
+    if not line or not len(line) then continue
+    parts=split(line,":")
+    if len(parts)<2 then continue
+    push(entries,{"user":parts[0],"hash":parts[1]})
+  end for
+  if not entries then
+    print yellow("[i] No accounts found")
+    return []
+  end if
+  // Display user list
+  print grey(ljust("#",5))+grey(ljust("USER",16))+grey("HASH")
+  for e in entries
+    i=__e_idx+1
+    print white(ljust(str(i),5))+white(ljust(e.user,16))+blue(e.hash)
+  end for
+  if not crypto then return []
+  cracked=[]
+  print ""
+  print grey("  Enter # to crack, 'a' for all, or 'b' to skip")
+  while true
+    ans=user_input(green("[Crack #/a/b] "))
+    if not ans or lower(trim(ans))=="b" then return cracked
+    if lower(trim(ans))=="a" then
+      for e in entries
+        print yellow("["+str(__e_idx+1)+"/"+str(len(entries))+"] ")+grey("Cracking "+e.user+"...")
+        pass=decipher(crypto,e.hash)
+        if not pass then
+          print white(ljust(e.user,16))+red("failed")
+        else
+          print white(ljust(e.user,16))+green(pass)
+          push(cracked,{"user":e.user,"pass":pass})
+        end if
+      end for
+      return cracked
+    end if
+    sel=to_int(trim(ans))
+    if not sel isa number or sel<1 or sel>len(entries) then
+      print red("[!] Invalid selection")
+      continue
+    end if
+    e=entries[sel-1]
+    print yellow("[i] ")+grey("Cracking "+e.user+"...")
+    pass=decipher(crypto,e.hash)
+    if not pass then
+      print white(ljust(e.user,16))+red("failed")
+    else
+      print white(ljust(e.user,16))+green(pass)
+      push(cracked,{"user":e.user,"pass":pass})
+    end if
+  end while
+end function
+wipeLog=function(x)
+  obj=typeof(x)
+  if obj=="computer" then comp=x
+  if obj=="shell" or obj=="ftpshell" then comp=host_computer(x)
+  if obj=="file" then
+    root=toRoot(x)
+    if not root then
+      print red("[!] Cannot resolve root from file object")
+      return
+    end if
+    logFile=null
+    for f in getAllFiles(root)
+      if path(f)=="/var/system.log" then
+        logFile=f
+        break
+      end if
+    end for
+    if not logFile then
+      print yellow("[i] system.log not found")
+      return
+    end if
+    if not has_permission(logFile,"w") then
+      print red("[!] No write permission to system.log")
+      return
+    end if
+    // For file objects, find any writable file to move over system.log
+    wf=null
+    for f in getAllFiles(root)
+      if path(f)=="/var/system.log" then continue
+      if has_permission(f,"r") and has_permission(f,"w") then
+        wf=f
+        break
+      end if
+    end for
+    if not wf then
+      print red("[!] No writable file found to use for wipe")
+      return
+    end if
+    move(wf,"/var","system.log")
+    print green("[+] system.log wiped")
+    return
+  end if
+  if not comp then
+    print red("[!] Cannot get computer from object")
+    return
+  end if
+  logFile=File(comp,"/var/system.log")
+  if not logFile then
+    print yellow("[i] system.log not found")
+    return
+  end if
+  if not has_permission(logFile,"w") then
+    print red("[!] No write permission to system.log")
+    return
+  end if
+  r=touch(comp,"/var","_t")
+  if r isa string then
+    if r=="The file already exists" then
+      move(File(comp,"/var/_t"),"/var","system.log")
+    else
+      print red("[!] "+r)
+      return
+    end if
+  else if r isa number then
+    move(File(comp,"/var/_t"),"/var","system.log")
+  else
+    print red("[!] Failed to create temp file")
+    return
+  end if
+  print green("[+] system.log wiped")
+end function
+canWipeLog=function(x)
+  obj=typeof(x)
+  if obj=="computer" then
+    lf=File(x,"/var/system.log")
+    if lf and has_permission(lf,"w") then return true
+    return false
+  end if
+  if obj=="shell" or obj=="ftpshell" then
+    lf=File(host_computer(x),"/var/system.log")
+    if lf and has_permission(lf,"w") then return true
+    return false
+  end if
+  if obj=="file" then
+    root=toRoot(x)
+    if not root then return false
+    for f in getAllFiles(root)
+      if path(f)=="/var/system.log" then
+        if has_permission(f,"w") then return true
+        return false
+      end if
+    end for
+  end if
+  return false
+end function
+connectAs=function(creds,ex)
+  if not creds then
+    print yellow("[i] No cracked credentials available")
+    return null
+  end if
+  print ""
+  print grey("  Cracked credentials:")
+  for c in creds
+    print white("  "+str(__c_idx+1)+") ")+green(c.user)+grey(" : ")+yellow(c.pass)
+  end for
+  print ""
+  ans=user_input(green("[Connect as #, or 'b' to skip] "))
+  if not ans or lower(trim(ans))=="b" then return null
+  ci=to_int(trim(ans))
+  if not ci isa number or ci<1 or ci>len(creds) then
+    print red("[!] Invalid selection")
+    return null
+  end if
+  cred=creds[ci-1]
+  // Find writable home dir
+  u=getUserEX(ex)
+  comp=host_computer(ex)
+  home="/home/"+u
+  if u=="root" then home="/root"
+  hdir=File(comp,home)
+  if not hdir or not has_permission(hdir,"w") then
+    // Try /tmp
+    home="/tmp"
+    hdir=File(comp,home)
+    if not hdir or not has_permission(hdir,"w") then
+      print red("[!] No writable directory found")
+      return null
+    end if
+  end if
+  // Clear previous
+  if hasIndex(get_custom_object,"packRootShell") then get_custom_object.packRootShell=null
+  // Build su script
+  code="get_custom_object[""packRootShell""]=get_shell("""+cred.user+""","""+cred.pass+""")"
+  touch(comp,home,".x_x.src")
+  f=File(comp,home+"/.x_x.src")
+  if not f then
+    print red("[!] Failed to create build file")
+    return null
+  end if
+  set_content(f,code)
+  print yellow("[i] ")+grey("Building su payload...")
+  r=build(ex,path(f),home)
+  if r!="" then
+    print red("[!] Build failed: "+r)
+    delete(f)
+    return null
+  end if
+  launch(ex,home+"/.x_x")
+  // Cleanup
+  f=File(comp,home+"/.x_x.src")
+  if f then delete(f)
+  f=File(comp,home+"/.x_x")
+  if f then delete(f)
+  // Check result
+  if hasIndex(get_custom_object,"packRootShell") and typeof(get_custom_object.packRootShell)=="shell" then
+    s=get_custom_object.packRootShell
+    print green("[+] Got "+cred.user+" shell!")
+    return s
+  end if
+  print red("[!] su failed — wrong password?")
+  return null
+end function
+_getRemoteMetax=function(shell)
+  comp=host_computer(shell)
+  lip=comp.local_ip
+  if not lip then lip=comp.public_ip
+  if not lip then return null
+  if hasIndex(get_custom_object.metas,lip) and get_custom_object.metas[lip] then return get_custom_object.metas[lip]
+  u=getUserEX(shell)
+  if u=="root" then home="/root" else home="/home/"+u
+  print yellow("[i] ")+grey("Uploading metaxploit.so...")
+  r=scp(get_custom_object.localShell,get_custom_object.metaxPath,home,shell)
+  if r isa string then
+    print red("[!] SCP failed: "+r)
+    return null
+  end if
+  if hasIndex(get_custom_object,"meta_local") then get_custom_object.meta_local=null
+  code="get_custom_object[""meta_local""]=include_lib("""+home+"/metaxploit.so"")"
+  touch(comp,home,".x_m.src")
+  f=File(comp,home+"/.x_m.src")
+  if not f then
+    print red("[!] Failed to create loader")
+    f=File(comp,home+"/metaxploit.so")
+    if f then delete(f)
+    return null
+  end if
+  set_content(f,code)
+  print yellow("[i] ")+grey("Building loader...")
+  r=build(shell,path(f),home)
+  if r!="" then
+    print red("[!] Build failed: "+r)
+    f=File(comp,home+"/.x_m.src")
+    if f then delete(f)
+    f=File(comp,home+"/metaxploit.so")
+    if f then delete(f)
+    return null
+  end if
+  launch(shell,home+"/.x_m")
+  f=File(comp,home+"/.x_m.src")
+  if f then delete(f)
+  f=File(comp,home+"/.x_m")
+  if f then delete(f)
+  if not hasIndex(get_custom_object,"meta_local") or not get_custom_object.meta_local then
+    print red("[!] Failed to load metaxploit on remote")
+    f=File(comp,home+"/metaxploit.so")
+    if f then delete(f)
+    return null
+  end if
+  rMetax=get_custom_object.meta_local
+  f=File(comp,home+"/metaxploit.so")
+  if f then delete(f)
+  get_custom_object.metas[lip]=rMetax
+  print green("[+] ")+grey("Cached metaxploit for ")+yellow(lip)
+  return rMetax
+end function
+localScan=function(remoteShell)
+  comp=host_computer(remoteShell)
+  lip=comp.local_ip
+  if not lip then lip=comp.public_ip
+  if not lip then
+    print red("[!] Cannot determine IP for this shell")
+    return
+  end if
+  rMetax=_getRemoteMetax(remoteShell)
+  if not rMetax then return
+  // Scan local /lib/ files
+  remoteIP=comp.public_ip
+  print ""
+  print green("[+] ")+white("Scanning local libraries on ")+yellow(lip)
+  print ""
+  libDir=File(comp,"/lib")
+  if not libDir then
+    print red("[!] Cannot access /lib")
+    return
+  end if
+  libFiles=get_files(libDir)
+  if not libFiles then
+    print yellow("[i] No library files found in /lib")
+    return
+  end if
+  print yellow("[i]")+" Scanning "+str(len(libFiles))+" libraries..."
+  print ""
+  lTargets=[]
+  hMetax=get_custom_object.metax
+  for lf in libFiles
+    if name(lf)=="metaxploit.so" then continue
+    lib=load(rMetax,path(lf))
+    if not lib then continue
+    ln=lib_name(lib)
+    ver=version(lib)
+    addresses=scan(hMetax,lib)
+    if not addresses then continue
+    exploits=[]
+    for addr in addresses
+      vulnInfo=scan_address(hMetax,lib,addr)
+      if not vulnInfo then continue
+      for line in split(vulnInfo,char(10))
+        if indexOf(line,"Unsafe check")==0 then
+          s=indexOf(line,"<b>")+3
+          d=indexOf(line,"</b>")
+          if s>2 and d!=null then
+            unsecured=line[s:d]
+            push(exploits,{"addr":addr,"val":unsecured})
+          end if
+        end if
+      end for
+    end for
+    if not exploits then continue
+    p=is_patched(lib,1)
+    if p isa string then
+      patchStr=green("Patched To: "+p)
+    else if p==1 then
+      patchStr=green("Patched")
+    else
+      patchStr=red("Not Patched")
+    end if
+    shells=0
+    computers=0
+    files=0
+    bounces=0
+    unknown=0
+    classified=[]
+    for e in exploits
+      ex=overflow(lib,e.addr,e.val)
+      obj=typeof(ex)
+      etype="unknown"
+      euser=""
+      if obj=="shell" or obj=="ftpshell" then
+        shells=shells+1
+        etype="shell"
+        euser=getUserEX(ex)
+      else if obj=="computer" then
+        if ln=="kernel_router.so" then
+          bounces=bounces+1
+          etype="bounce"
+        else
+          computers=computers+1
+          etype="computer"
+          euser=getUserEX(ex)
+        end if
+      else if obj=="file" then
+        files=files+1
+        etype="file"
+        euser=getUserEX(ex)
+      else if not ex then
+        if ln=="kernel_router.so" then
+          bounces=bounces+1
+          etype="bounce"
+        else
+          unknown=unknown+1
+          etype="null"
+        end if
+      else
+        unknown=unknown+1
+      end if
+      push(classified,{"addr":e.addr,"val":e.val,"type":etype,"user":euser})
+    end for
+    push(lTargets,{"lib":lib,"ln":ln,"ver":ver,"exploits":classified,"patchStr":patchStr,"shells":shells,"computers":computers,"files":files,"bounces":bounces,"unknown":unknown})
+  end for
+  if not lTargets then
+    print yellow("[i]")+" No exploitable libraries found (local)"
+    return
+  end if
+  // Interactive menu
+  lExit=false
+  while true
+    print ""
+    print liteGrey("Local Scan: "+lip)
+    print ""
+    print yellow("[i]")+" Exploitable libraries:"
+    for tgt in lTargets
+      i=__tgt_idx+1
+      total=tgt.shells+tgt.computers+tgt.files+tgt.bounces+tgt.unknown
+      t=purple("[")+white(str(i))+purple("] ")+yellow("• ")+orange(tgt.ln)+white(" (Version: "+tgt.ver+") ")
+      print t
+      print green("    |-> ")+tgt.patchStr
+      print "    "+green(str(total))+white(" exploits found")
+      print "    "+white("Shells")+orange(":")+green(str(tgt.shells))+yellow(" - ")+white("Computers")+orange(":")+yellow(str(tgt.computers))+yellow(" - ")+white("Files")+orange(":")+red(str(tgt.files))+yellow(" - ")+white("Unknown")+orange(":")+error(str(tgt.unknown))
+    end for
+    print ""
+    c=user_input(green("[Target #, or 'x' to exit local scan] "))
+    if not c or lower(trim(c))=="x" then break
+    sel=to_int(trim(c))
+    if not sel isa number or sel<1 or sel>len(lTargets) then
+      print red("[!] Invalid selection")
+      continue
+    end if
+    tgt=lTargets[sel-1]
+    while true
+      print ""
+      print orange("--- Exploits for ")+white(tgt.ln)+orange(" (local) ---")
+      print grey(ljust("#",5))+grey(ljust("TYPE",12))+grey(ljust("USER",12))+grey(ljust("ADDRESS",14))+grey("VALUE")
+      for e in tgt.exploits
+        ei=__e_idx+1
+        if e.type=="shell" then tag=green(ljust("shell",12))
+        if e.type=="computer" then tag=yellow(ljust("computer",12))
+        if e.type=="file" then tag=red(ljust("file",12))
+        if e.type=="bounce" then tag=purple(ljust("bounce",12))
+        if e.type=="null" then tag=grey(ljust("null",12))
+        if e.type=="unknown" then tag=grey(ljust("unknown",12))
+        if e.user=="root" then
+          utag=green(ljust(e.user,12))
+        else if e.user=="guest" then
+          utag=red(ljust(e.user,12))
+        else if e.user!="" then
+          utag=yellow(ljust(e.user,12))
+        else
+          utag=grey(ljust("-",12))
+        end if
+        print white(ljust(str(ei),5))+tag+utag+blue(ljust(e.addr,14))+grey(e.val)
+      end for
+      print ""
+      c2=user_input(green("[Exploit #, 'b' back, 'x' exit] "))
+      if not c2 or lower(trim(c2))=="b" then break
+      if lower(trim(c2))=="x" then
+        lExit=true
+        break
+      end if
+      esel=to_int(trim(c2))
+      if not esel isa number or esel<1 or esel>len(tgt.exploits) then
+        print red("[!] Invalid selection")
+        continue
+      end if
+      exploit=tgt.exploits[esel-1]
+      get_custom_object.meta_local=null
+      if exploit.type=="bounce" then
+        bounceIP=user_input(orange("[Bounce target IP] "))
+        if not bounceIP or not is_valid_ip(trim(bounceIP)) then
+          print red("[!] Invalid IP")
+          continue
+        end if
+        ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(bounceIP))
+      else if exploit.type=="null" then
+        print grey("  This exploit returned null during scan.")
+        ans=user_input(green("[New password, or 'b' to skip] "))
+        if not ans or lower(trim(ans))=="b" then continue
+        ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(ans))
+        if not ex then
+          print yellow("[i] Exploit returned null again")
+        else if ex isa string then
+          print red("[!] "+ex)
+        else
+          print green("[+] Password change may have succeeded!")
+        end if
+        continue
+      else
+        ex=overflow(tgt.lib,exploit.addr,exploit.val)
+      end if
+      obj=typeof(ex)
+      if obj=="shell" or obj=="ftpshell" then
+        print green("[+] Got shell!")
+        print orange("    User: ")+white(getUserEX(ex))
+        print orange("    Host: ")+white(host_computer(ex).public_ip)
+        creds=[]
+        passwd=getFileEx(ex,"/etc/passwd")
+        if passwd then
+          print ""
+          print orange("--- /etc/passwd ---")
+          creds=printPasswd(passwd)
+          _mergeCreds(networkCreds,creds)
+        else
+          print yellow("[i] Cannot read /etc/passwd")
+        end if
+        if networkCreds and getUserEX(ex)!="root" then
+          newShell=connectAs(networkCreds,ex)
+          if newShell then
+            ex=newShell
+            print orange("    User: ")+white(getUserEX(ex))
+            print orange("    Host: ")+white(host_computer(ex).public_ip)
+          end if
+        end if
+        if canWipeLog(ex) then
+          ans=user_input(green("[Wipe log? y/n] "))
+          if ans and lower(trim(ans))=="y" then wipeLog(ex)
+        end if
+      else if obj=="computer" then
+        print green("[+] Got computer!")
+        print orange("    User: ")+white(getUserEX(ex))
+        print orange("    Host: ")+white(ex.public_ip)
+        creds=[]
+        passwd=getFileEx(ex,"/etc/passwd")
+        if passwd then
+          print ""
+          print orange("--- /etc/passwd ---")
+          creds=printPasswd(passwd)
+          _mergeCreds(networkCreds,creds)
+        else
+          print yellow("[i] Cannot read /etc/passwd")
+        end if
+        if canWipeLog(ex) then
+          ans=user_input(green("[Wipe log? y/n] "))
+          if ans and lower(trim(ans))=="y" then wipeLog(ex)
+        end if
+      else if obj=="file" then
+        print green("[+] Got file!")
+        print orange("    User: ")+white(getUserEX(ex))
+        print orange("    Path: ")+white(path(ex))
+        print orange("    Name: ")+white(name(ex))
+        creds=[]
+        passwd=getFileEx(ex,"/etc/passwd")
+        if passwd then
+          print ""
+          print orange("--- /etc/passwd ---")
+          creds=printPasswd(passwd)
+          _mergeCreds(networkCreds,creds)
+        else
+          print yellow("[i] Cannot read /etc/passwd")
+        end if
+        if canWipeLog(ex) then
+          ans=user_input(green("[Wipe log? y/n] "))
+          if ans and lower(trim(ans))=="y" then wipeLog(ex)
+        end if
+      else if ex isa string then
+        print red("[!] "+ex)
+      else if not ex then
+        print yellow("[i] Exploit returned null")
+      else
+        print yellow("[i] Result type: "+typeof(ex))
+      end if
+    end while
+    if lExit then break
+  end while
+end function
+_exploitMenu=function(ex,exType)
+  shell=null
+  if exType=="shell" then shell=ex
+  while true
+    print ""
+    pCnt=_countPasswd(ex)
+    print green("[c]")+grey(" Crack")+grey(" ("+str(pCnt)+" accounts)")
+    if shell and networkCreds and getUserEX(ex)!="root" then
+      print green("[s]")+grey(" Su")+grey(" ("+str(len(networkCreds))+" cracked creds)")
+    end if
+    if shell then
+      aCnt=_countApps(shell)
+      print green("[a]")+grey(" Apps")+grey(" ("+str(aCnt)+" available)")
+      print green("[l]")+grey(" Local scan")
+      print green("[n]")+grey(" LAN scan")
+    end if
+    if canWipeLog(ex) then print green("[w]")+grey(" Wipe log")
+    print green("[b]")+grey(" Back")
+    ans=user_input(green("[action] "))
+    if not ans or lower(trim(ans))=="b" then break
+    ch=lower(trim(ans))
+    if ch=="c" then
+      passwd=getFileEx(ex,"/etc/passwd")
+      if passwd then
+        print ""
+        print orange("--- /etc/passwd ---")
+        creds=printPasswd(passwd)
+        _mergeCreds(networkCreds,creds)
+      else
+        print yellow("[i] Cannot read /etc/passwd")
+      end if
+    else if ch=="s" then
+      if networkCreds and getUserEX(ex)!="root" then
+        newShell=connectAs(networkCreds,ex)
+        if newShell then
+          ex=newShell
+          shell=newShell
+          print orange("    User: ")+white(getUserEX(ex))
+          print orange("    Host: ")+white(host_computer(ex).public_ip)
+        end if
+      else
+        print yellow("[i] No creds or already root")
+      end if
+    else if ch=="a" then
+      if not shell then
+        print yellow("[i] Need a shell for apps")
+        continue
+      end if
+      comp=host_computer(shell)
+      apps=[]
+      dirs=["/usr/bin","/bin"]
+      for d in dirs
+        df=File(comp,d)
+        if not df then continue
+        for f in get_files(df);push(apps,{"name":name(f),"dir":d});end for
+      end for
+      if apps then
+        while true
+          print ""
+          curDir=""
+          row=""
+          col=0
+          for a in apps
+            if a.dir!=curDir then
+              if row then print "  "+row
+              row=""
+              col=0
+              if curDir then print ""
+              curDir=a.dir
+              print grey("  "+curDir+":")
+            end if
+            row=row+white(ljust("["+str(__a_idx+1)+"] ",5))+blue(ljust(a.name,18))
+            col=col+1
+            if col==4 then
+              print "  "+row
+              row=""
+              col=0
+            end if
+          end for
+          if row then print "  "+row
+          print ""
+          sel=user_input(green("[App # + args, or 'b' to go back] "))
+          if not sel or lower(trim(sel))=="b" then break
+          parts=split(trim(sel)," ")
+          si=to_int(parts[0])
+          if si isa number and si>=1 and si<=len(apps) then
+            appPath=apps[si-1].dir+"/"+apps[si-1].name
+            if len(parts)>1 then
+              appArgs=join(parts[1:]," ")
+              launch(shell,appPath,appArgs)
+            else
+              launch(shell,appPath)
+            end if
+          else
+            print red("[!] Invalid selection")
+          end if
+        end while
+      else
+        print yellow("[i] No apps found")
+      end if
+    else if ch=="l" then
+      if not shell then
+        print yellow("[i] Need a shell for local scan")
+        continue
+      end if
+      localScan(shell)
+    else if ch=="n" then
+      if not shell then
+        print yellow("[i] Need a shell for LAN scan")
+        continue
+      end if
+      scanLAN(shell)
+    else if ch=="w" then
+      if canWipeLog(ex) then wipeLog(ex) else print yellow("[i] No write permission to system.log")
+    else
+      print red("[!] Unknown action")
+    end if
+  end while
+end function
+_buildLanScan=function(shell)
+  comp=host_computer(shell)
+  u=getUserEX(shell)
+  if u=="root" then
+    home="/root"
+  else
+    home="/home/"+u
+  end if
+  if hasIndex(get_custom_object,"scanlan_result") then get_custom_object.scanlan_result=null
+  code="deep=function(t,s);R=[];if indexOf(s,t)!=null then return R;D={""ip"":t,""ports"":[],""devices"":[],""type"":""device"",""fw"":false,""fwd"":false};if not ping(get_shell,t) then;push(R,D);return R;end if;push(s,t);r=get_router(t);if r!=null then;F=firewall_rules(r);if F isa list and F then;D[""fw""]=true;for z in F;if indexOf(z,""DENY"")!=null then D[""fwd""]=true;end for;end if;if local_ip(get_router(public_ip(r)))==t then;D[""type""]=""edge"";else;if get_switch(t)!=null then D[""type""]=""switch"" else D[""type""]=""router"";end if;for p in device_ports(r,t);if port_number(p)==8080 then push(D[""ports""],{""pn"":0,""lip"":local_ip(r),""pip"":public_ip(r),""svc"":""router"",""ver"":kernel_version(r),""st"":""open""});d={};d[""pn""]=port_number(p);d[""lip""]=get_lan_ip(p);d[""pip""]=public_ip(r);i=split(port_info(r,p),"" "");d[""svc""]=i[0];d[""ver""]=i[1];if is_closed(p) then d[""st""]=""closed"" else d[""st""]=""open"";push(D[""ports""],d);end for;v=devices_lan_ip(r);for c2 in v;if indexOf(s,c2)!=null or c2==t then continue;u=deep(c2,s);for l in u;push(D[""devices""],l);end for;end for;else;M=get_router(s[0]);if M!=null then;for p in device_ports(M,t);d={};d[""pn""]=port_number(p);d[""lip""]=get_lan_ip(p);d[""pip""]=public_ip(M);i=split(port_info(M,p),"" "");d[""svc""]=i[0];d[""ver""]=i[1];if is_closed(p) then d[""st""]=""closed"" else d[""st""]=""open"";pn=d[""pn""];if pn==37777 then D[""type""]=""CCTV"";if pn==1883 then D[""type""]=""SAPP"";if pn==1222 then D[""type""]=""RSHL"";if pn==5555 then D[""type""]=""ADB"";push(D[""ports""],d);end for;end if;end if;push(R,D);return R;end function;get_custom_object[""scanlan_result""]=deep(local_ip(get_router),[])"
+  touch(comp,home,".x_ls.src")
+  f=File(comp,home+"/.x_ls.src")
+  if not f then
+    print red("[!] Failed to create LAN scanner")
+    return null
+  end if
+  set_content(f,code)
+  r=build(shell,path(f),home)
+  if r!="" then
+    print red("[!] Build failed: "+r)
+    f=File(comp,home+"/.x_ls.src")
+    if f then delete(f)
+    return null
+  end if
+  launch(shell,home+"/.x_ls")
+  f=File(comp,home+"/.x_ls.src")
+  if f then delete(f)
+  f=File(comp,home+"/.x_ls")
+  if f then delete(f)
+  if not hasIndex(get_custom_object,"scanlan_result") or not get_custom_object.scanlan_result then
+    print red("[!] LAN scan returned no results")
+    return null
+  end if
+  return get_custom_object.scanlan_result
+end function
+scanLAN=function(remoteShell)
+  rMetax=_getRemoteMetax(remoteShell)
+  if not rMetax then return
+  hMetax=get_custom_object.metax
+  comp=host_computer(remoteShell)
+  lip=comp.local_ip
+  if not lip then lip=comp.public_ip
+  print yellow("[i] ")+grey("Building network map...")
+  lanData=_buildLanScan(remoteShell)
+  if not lanData then return
+  // Flatten device tree
+  devList=[]
+  _flatten=function(devices)
+    for dev in devices
+      dev.you=false
+      if dev.ip==lip then dev.you=true
+      push(devList,dev)
+      if dev.devices then _flatten(dev.devices)
+    end for
+  end function
+  _flatten(lanData)
+  if not devList then
+    print yellow("[i] No LAN devices found")
+    return
+  end if
+  // Display
+  while true
+    print ""
+    print orange("--- LAN Devices ("+comp.public_ip+") ---")
+    print grey(ljust("#",5))+grey(ljust("LAN IP",18))+grey(ljust("TYPE",12))+grey(ljust("FW",5))+grey("PORTS")
+    for d in devList
+      di=__d_idx+1
+      tag=d.type
+      clr="blue"
+      if tag=="edge" then
+        tStr="Edge Rtr"
+        clr="white"
+      else if tag=="router" then
+        tStr="Router"
+        clr="white"
+      else if tag=="switch" then
+        tStr="Switch"
+        clr="yellow"
+      else if tag=="CCTV" then
+        tStr="Camera"
+        clr="orange"
+      else if tag=="SAPP" then
+        tStr="Appliance"
+        clr="orange"
+      else if tag=="RSHL" then
+        tStr="RShell"
+        clr="purple"
+      else if tag=="ADB" then
+        tStr="ADB"
+        clr="orange"
+      else
+        tStr="Device"
+      end if
+      fwStr="-"
+      fwClr="grey"
+      if d.fw then
+        fwStr="F"
+        if d.fwd then fwClr="red" else fwClr="green"
+      end if
+      portNums=[]
+      for pt in d.ports
+        push(portNums,str(pt.pn))
+      end for
+      pStr=""
+      if portNums then pStr=white(join(portNums,","))
+      youTag=""
+      if d.you then youTag=" "+green("[YOU]")
+      line=ljust(str(di),5)+ljust(d.ip,18)+ljust(tStr,12)+ljust(fwStr,5)
+      cLine=white(line[:5])+yellow(line[5:23])
+      if clr=="white" then
+        cLine=cLine+white(line[23:35])
+      else if clr=="yellow" then
+        cLine=cLine+yellow(line[23:35])
+      else if clr=="orange" then
+        cLine=cLine+orange(line[23:35])
+      else if clr=="purple" then
+        cLine=cLine+purple(line[23:35])
+      else
+        cLine=cLine+blue(line[23:35])
+      end if
+      if fwClr=="red" then
+        cLine=cLine+red(line[35:40])
+      else if fwClr=="green" then
+        cLine=cLine+green(line[35:40])
+      else
+        cLine=cLine+grey(line[35:40])
+      end if
+      print cLine+pStr+youTag
+    end for
+    print ""
+    c=user_input(green("[Device # to scan, 'r' refresh, 'b' back] "))
+    if not c or lower(trim(c))=="b" then return
+    if lower(trim(c))=="r" then
+      print yellow("[i] ")+grey("Refreshing network map...")
+      lanData=_buildLanScan(remoteShell)
+      if not lanData then return
+      devList=[]
+      _flatten(lanData)
+      continue
+    end if
+    sel=to_int(trim(c))
+    if not sel isa number or sel<1 or sel>len(devList) then
+      print red("[!] Invalid selection")
+      continue
+    end if
+    dev=devList[sel-1]
+    // Show ports for this device
+    print ""
+    print orange("--- Ports on ")+yellow(dev.ip)+orange(" (")+blue(dev.type)+orange(") ---")
+    print grey(ljust("PORT",8))+grey(ljust("STATE",9))+grey(ljust("SERVICE",14))+grey(ljust("VERSION",11))+grey("LAN")
+    for pt in dev.ports
+      if pt.st=="open" then state=green(ljust("open",9)) else state=red(ljust("closed",9))
+      print green(ljust(str(pt.pn),8))+state+blue(ljust(pt.svc,14))+blue(ljust(pt.ver,11))+lime(pt.lip)
+    end for
+    // Scan exploits on this device's ports
+    print ""
+    print yellow("[i]")+" Scanning "+dev.ip+" for exploits..."
+    print ""
+    dTargets=[]
+    for pt in dev.ports
+      if pt.st=="closed" then continue
+      session=net_use(rMetax,pt.lip,pt.pn)
+      if not session then continue
+      lib=dump_lib(session)
+      if not lib then continue
+      ln=lib_name(lib)
+      ver=version(lib)
+      addresses=scan(hMetax,lib)
+      if not addresses then continue
+      exploits=[]
+      for addr in addresses
+        vulnInfo=scan_address(hMetax,lib,addr)
+        if not vulnInfo then continue
+        for line in split(vulnInfo,char(10))
+          if indexOf(line,"Unsafe check")==0 then
+            s=indexOf(line,"<b>")+3
+            d2=indexOf(line,"</b>")
+            if s>2 and d2!=null then
+              unsecured=line[s:d2]
+              push(exploits,{"addr":addr,"val":unsecured})
+            end if
+          end if
+        end for
+      end for
+      if not exploits then continue
+      p=is_patched(lib,1)
+      if p isa string then
+        patchStr=green("Patched To: "+p)
+      else if p==1 then
+        patchStr=green("Patched")
+      else
+        patchStr=red("Not Patched")
+      end if
+      shells=0
+      computers=0
+      files=0
+      bounces=0
+      unknown=0
+      classified=[]
+      for e in exploits
+        ex=overflow(lib,e.addr,e.val)
+        obj=typeof(ex)
+        etype="unknown"
+        euser=""
+        if obj=="shell" or obj=="ftpshell" then
+          shells=shells+1
+          etype="shell"
+          euser=getUserEX(ex)
+        else if obj=="computer" then
+          if ln=="kernel_router.so" then
+            bounces=bounces+1
+            etype="bounce"
+          else
+            computers=computers+1
+            etype="computer"
+            euser=getUserEX(ex)
+          end if
+        else if obj=="file" then
+          files=files+1
+          etype="file"
+          euser=getUserEX(ex)
+        else if not ex then
+          if ln=="kernel_router.so" then
+            bounces=bounces+1
+            etype="bounce"
+          else
+            unknown=unknown+1
+            etype="null"
+          end if
+        else
+          unknown=unknown+1
+        end if
+        push(classified,{"addr":e.addr,"val":e.val,"type":etype,"user":euser})
+      end for
+      push(dTargets,{"lib":lib,"ln":ln,"ver":ver,"lan":pt.lip,"port":pt.pn,"exploits":classified,"patchStr":patchStr,"shells":shells,"computers":computers,"files":files,"bounces":bounces,"unknown":unknown})
+    end for
+    if not dTargets then
+      print yellow("[i]")+" No exploitable services on "+dev.ip
+      continue
+    end if
+    // Interactive exploit menu for this device
+    dExit=false
+    while true
+      print ""
+      print orange("--- Attack vectors on ")+yellow(dev.ip)+orange(" ---")
+      for tgt in dTargets
+        i=__tgt_idx+1
+        total=tgt.shells+tgt.computers+tgt.files+tgt.bounces+tgt.unknown
+        t=purple("[")+white(str(i))+purple("] ")+yellow("• ")+orange(tgt.ln)+white(" ("+tgt.ver+") ")
+        print t+blue("-> ")+yellow(tgt.lan)+white(":")+green(str(tgt.port))
+        print green("    |-> ")+tgt.patchStr
+        print "    "+green(str(total))+white(" exploits")
+        bd=""
+        if tgt.port==0 then bd=yellow(" - ")+white("Bounces")+orange(":")+purple(str(tgt.bounces))
+        print "    "+white("Sh")+orange(":")+green(str(tgt.shells))+yellow(" - ")+white("Co")+orange(":")+yellow(str(tgt.computers))+yellow(" - ")+white("Fi")+orange(":")+red(str(tgt.files))+bd+yellow(" - ")+white("Un")+orange(":")+error(str(tgt.unknown))
+      end for
+      print ""
+      c2=user_input(green("[Target #, 'b' back, 'x' exit] "))
+      if not c2 or lower(trim(c2))=="b" then break
+      if lower(trim(c2))=="x" then
+        dExit=true
+        break
+      end if
+      tsel=to_int(trim(c2))
+      if not tsel isa number or tsel<1 or tsel>len(dTargets) then
+        print red("[!] Invalid selection")
+        continue
+      end if
+      tgt=dTargets[tsel-1]
+      while true
+        print ""
+        print orange("--- Exploits ")+white(tgt.ln)+orange(" ")+yellow(dev.ip+":"+str(tgt.port))+orange(" ---")
+        print grey(ljust("#",5))+grey(ljust("TYPE",12))+grey(ljust("USER",12))+grey(ljust("ADDRESS",14))+grey("VALUE")
+        for e in tgt.exploits
+          ei=__e_idx+1
+          if e.type=="shell" then tag=green(ljust("shell",12))
+          if e.type=="computer" then tag=yellow(ljust("computer",12))
+          if e.type=="file" then tag=red(ljust("file",12))
+          if e.type=="bounce" then tag=purple(ljust("bounce",12))
+          if e.type=="null" then tag=grey(ljust("null",12))
+          if e.type=="unknown" then tag=grey(ljust("unknown",12))
+          if e.user=="root" then
+            utag=green(ljust(e.user,12))
+          else if e.user=="guest" then
+            utag=red(ljust(e.user,12))
+          else if e.user!="" then
+            utag=yellow(ljust(e.user,12))
+          else
+            utag=grey(ljust("-",12))
+          end if
+          print white(ljust(str(ei),5))+tag+utag+blue(ljust(e.addr,14))+grey(e.val)
+        end for
+        print ""
+        c3=user_input(green("[Exploit #, 'b' back, 'x' exit] "))
+        if not c3 or lower(trim(c3))=="b" then break
+        if lower(trim(c3))=="x" then
+          dExit=true
+          break
+        end if
+        esel=to_int(trim(c3))
+        if not esel isa number or esel<1 or esel>len(tgt.exploits) then
+          print red("[!] Invalid selection")
+          continue
+        end if
+        exploit=tgt.exploits[esel-1]
+        get_custom_object.meta_local=null
+        if exploit.type=="bounce" then
+          bounceIP=user_input(orange("[Bounce target IP] "))
+          if not bounceIP or not is_valid_ip(trim(bounceIP)) then
+            print red("[!] Invalid IP")
+            continue
+          end if
+          ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(bounceIP))
+        else if exploit.type=="null" then
+          print grey("  This exploit returned null during scan.")
+          ans=user_input(green("[New password, or 'b' to skip] "))
+          if not ans or lower(trim(ans))=="b" then continue
+          ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(ans))
+          if not ex then
+            print yellow("[i] Exploit returned null again")
+          else if ex isa string then
+            print red("[!] "+ex)
+          else
+            print green("[+] Password change may have succeeded!")
+          end if
+          continue
+        else
+          ex=overflow(tgt.lib,exploit.addr,exploit.val)
+        end if
+        obj=typeof(ex)
+        if obj=="shell" or obj=="ftpshell" then
+          print green("[+] Got shell!")
+          print orange("    User: ")+white(getUserEX(ex))
+          print orange("    Host: ")+white(host_computer(ex).public_ip)
+          _exploitMenu(ex,"shell")
+        else if obj=="computer" then
+          print green("[+] Got computer!")
+          print orange("    User: ")+white(getUserEX(ex))
+          print orange("    Host: ")+white(ex.public_ip)
+          _exploitMenu(ex,"computer")
+        else if obj=="file" then
+          print green("[+] Got file!")
+          print orange("    User: ")+white(getUserEX(ex))
+          print orange("    Path: ")+white(path(ex))
+          print orange("    Name: ")+white(name(ex))
+          _exploitMenu(ex,"file")
+        else if ex isa string then
+          print red("[!] "+ex)
+        else if not ex then
+          print yellow("[i] Exploit returned null")
+        else
+          print yellow("[i] Result type: "+typeof(ex))
+        end if
+      end while
+      if dExit then break
+    end while
+  end while
+end function
+_countPasswd=function(ex)
+  pf=getFileEx(ex,"/etc/passwd")
+  if not pf then return 0
+  c=get_content(pf)
+  if not c then return 0
+  n=0
+  for line in split(c,char(10))
+    if not line or not len(line) then continue
+    pp=split(line,":")
+    if len(pp)<2 then continue
+    n=n+1
+  end for
+  return n
+end function
+_countApps=function(ex)
+  comp=host_computer(ex)
+  n=0
+  dirs=["/usr/bin","/bin"]
+  for d in dirs
+    df=File(comp,d)
+    if not df then continue
+    n=n+len(get_files(df))
+  end for
+  return n
+end function
+_mergeCreds=function(net,fresh)
+  for cr in fresh
+    dup=false
+    for nc in net
+      if nc.user==cr.user then dup=true
+    end for
+    if not dup then push(net,cr)
+  end for
+end function
+_showHelp=function
+  print ""
+  print green("================================================================")
+  print white("              "+yellow("Scanner")+" - Help")
+  print green("================================================================")
+  print ""
+  print white("Controls:")
+  print "  "+green("#")+"        Select target or exploit by number"
+  print "  "+green("b")+"        Go back to previous menu"
+  print "  "+green("x")+"        Exit scanner"
+  print "  "+green("?")+"        Show this help"
+  print ""
+  print white("After exploiting:")
+  print "  "+green("c")+"        Crack /etc/passwd hashes"
+  print "  "+green("s")+"        Su (switch user with cracked creds)"
+  print "  "+green("a")+"        Launch apps on remote"
+  print "  "+green("l")+"        Local scan (scan /lib/ on remote)"
+  print "  "+green("n")+"        LAN scan (map + exploit LAN devices)"
+  print "  "+green("w")+"        Wipe system.log"
+  print ""
+  print white("Tips:")
+  print "  Root password works across the whole network."
+  print "  Shell exploits offer local LAN scanning."
+  print "  Bounce exploits (port 0) let you reach other public IPs."
+  print green("================================================================")
+  print ""
+end function
+getRandomIP=function
+  while true
+    a=floor(rnd*255)+1
+    b=floor(rnd*255)
+    c=floor(rnd*255)
+    d=floor(rnd*255)+1
+    ip=a+"."+b+"."+c+"."+d
+    if a==10 then continue
+    if a==172 and b>=16 and b<=31 then continue
+    if a==192 and b==168 then continue
+    if a==127 then continue
+    if a==0 or a>=224 then continue
+    return ip
+  end while
+end function
+// ============================================================================
+// ARGUMENT PARSING
+// ============================================================================
+if not params or len(params)==0 then
+  print green("================================================================")
+  print white("              "+yellow("Scanner")+" - Port & Exploit Scanner")
+  print green("================================================================")
+  print ""
+  print white("Usage:")
+  print "  scanner <ip>       Scan target IP"
+  print "  scanner -r         Scan random IP"
+  print ""
+  print white("Options:")
+  print "  -q                       Quick mode (ports only, no exploits)"
+  print ""
+  print white("Controls:")
+  print "  #        Select target or exploit by number"
+  print "  b        Go back to previous menu"
+  print "  x        Exit scanner"
+  print ""
+  print white("Tips:")
+  print "  Root password works across the whole network."
+  print "  Shell exploits offer local LAN scanning (uploads metaxploit)."
+  print ""
+  print white("Examples:")
+  print "  scanner 44.204.236.24"
+  print "  scanner -r"
+  print "  scanner -r -q"
+  print green("================================================================")
+  exit
+end if
+metax=include_lib("/lib/metaxploit.so")
+if metax then
+  metaxPath="/lib/metaxploit.so"
+else
+  metax=include_lib(current_path+"/metaxploit.so")
+  metaxPath=current_path+"/metaxploit.so"
+end if
+if not metax then exit("metaxploit.so not found")
+crypto=include_lib("/lib/crypto.so")
+if not crypto then crypto=include_lib(current_path+"/crypto.so")
+get_custom_object.metax=metax
+get_custom_object.crypto=crypto
+get_custom_object.metaxPath=metaxPath
+localShell=get_shell
+get_custom_object.localShell=localShell
+get_custom_object.metas={}
+homeLIP=host_computer(localShell).local_ip
+if homeLIP then get_custom_object.metas[homeLIP]=metax
+quickMode=false
+targetIP=null
+for arg in params
+  if arg=="-r" then
+    targetIP=getRandomIP()
+  else if arg=="-q" then
+    quickMode=true
+  else
+    if not targetIP then targetIP=arg
+  end if
+end for
+if not targetIP then exit(red("[!] No target specified"))
+if not is_valid_ip(targetIP) then exit(red("[!] Invalid IP: "+targetIP))
+// ============================================================================
+// SCAN TARGET
+// ============================================================================
+router=get_router(targetIP)
+if not router then exit(red("[!] No route to "+targetIP))
+print ""
+print liteGrey("Scanner v1.0 — "+current_date)
+print liteGrey("Target: "+targetIP)
+print ""
+// Gather ports
+ports=[0]+used_ports(router)
+if len(ports)>1 and typeof(ports[1])=="string" then exit(red("[!] "+ports[1]))
+// Display port table
+portTable=[]
+portHeader=grey(ljust("PORT",8))+grey(ljust("STATE",9))+grey(ljust("SERVICE",14))+grey(ljust("VERSION",11))+grey("LAN")
+push(portTable,portHeader)
+print portHeader
+for port in ports
+  if port==0 then
+    svc="router"
+    ver=kernel_version(router)
+    lan=local_ip(router)
+    state=green(ljust("open",9))
+    row=green(ljust("0",8))+state+blue(ljust(svc,14))+blue(ljust(ver,11))+lime(lan)
+    push(portTable,row)
+    print row
+    continue
+  end if
+  info=split(port_info(router,port)," ")
+  svc=info[0]
+  ver=info[1]
+  lan=get_lan_ip(port)
+  portNum=port_number(port)
+  if is_closed(port) then state=red(ljust("closed",9)) else state=green(ljust("open",9))
+  row=green(ljust(str(portNum),8))+state+blue(ljust(svc,14))+blue(ljust(ver,11))+lime(lan)
+  push(portTable,row)
+  print row
+end for
+print ""
+if quickMode then exit
+// ============================================================================
+// EXPLOIT SCAN
+// ============================================================================
+print yellow("[i]")+" Scanning for exploits..."
+print ""
+idx=0
+allTargets=[]
+for port in ports
+  portNum=0
+  lan=local_ip(router)
+  if port!=0 then
+    if is_closed(port) then continue
+    portNum=port_number(port)
+    lan=get_lan_ip(port)
+  end if
+  // Connect to service
+  if portNum==0 then session=net_use(metax,public_ip(router)) else session=net_use(metax,public_ip(router),portNum)
+  if not session then continue
+  lib=dump_lib(session)
+  if not lib then continue
+  ln=lib_name(lib)
+  ver=version(lib)
+  // Scan for memory addresses
+  addresses=scan(metax,lib)
+  if not addresses then continue
+  // Gather all exploits for this lib
+  exploits=[]
+  for addr in addresses
+    vulnInfo=scan_address(metax,lib,addr)
+    if not vulnInfo then continue
+    for line in split(vulnInfo,char(10))
+      if indexOf(line,"Unsafe check")==0 then
+        s=indexOf(line,"<b>")+3
+        d=indexOf(line,"</b>")
+        if s>2 and d!=null then
+          unsecured=line[s:d]
+          push(exploits,{"addr":addr,"val":unsecured})
+        end if
+      end if
+    end for
+  end for
+  if not exploits then continue
+  idx=idx+1
+  // Check patch status
+  p=is_patched(lib,1)
+  if p isa string then
+    patchStr=green("Patched To: "+p)
+  else if p==1 then
+    patchStr=green("Patched")
+  else
+    patchStr=red("Not Patched")
+  end if
+  // Test each exploit and classify
+  shells=0
+  computers=0
+  files=0
+  bounces=0
+  unknown=0
+  classified=[]
+  for e in exploits
+    ex=overflow(lib,e.addr,e.val)
+    obj=typeof(ex)
+    etype="unknown"
+    euser=""
+    if obj=="shell" or obj=="ftpshell" then
+      shells=shells+1
+      etype="shell"
+      euser=getUserEX(ex)
+    else if obj=="computer" then
+      if ln=="kernel_router.so" then
+        bounces=bounces+1
+        etype="bounce"
+      else
+        computers=computers+1
+        etype="computer"
+        euser=getUserEX(ex)
+      end if
+    else if obj=="file" then
+      files=files+1
+      etype="file"
+      euser=getUserEX(ex)
+    else if not ex then
+      if ln=="kernel_router.so" then
+        bounces=bounces+1
+        etype="bounce"
+      else
+        unknown=unknown+1
+        etype="null"
+      end if
+    else
+      unknown=unknown+1
+    end if
+    push(classified,{"addr":e.addr,"val":e.val,"type":etype,"user":euser})
+  end for
+  // Store target info for interactive use
+  push(allTargets,{"lib":lib,"ln":ln,"ver":ver,"lan":lan,"port":portNum,"session":session,"exploits":classified,"patchStr":patchStr,"shells":shells,"computers":computers,"files":files,"bounces":bounces,"unknown":unknown})
+end for
+if not allTargets then
+  print yellow("[i]")+" No exploitable services found"
+  exit
+end if
+// ============================================================================
+// INTERACTIVE MENU
+// ============================================================================
+networkCreds=[]
+_exit=false
+while true
+  print ""
+  print liteGrey("Target: "+targetIP)
+  for row in portTable;print row;end for
+  print ""
+  print yellow("[i]")+" Found the following attack vectors:"
+  for tgt in allTargets
+    i=__tgt_idx+1
+    total=tgt.shells+tgt.computers+tgt.files+tgt.bounces+tgt.unknown
+    t=purple("[")+white(str(i))+purple("] ")+yellow("• ")+orange(tgt.ln)+white(" (Version: "+tgt.ver+") ")
+    if tgt.port==0 then print t+blue("-> ")+yellow(tgt.lan)+white(":")+green("0") else print t+blue("-> ")+yellow(tgt.lan)+white(":")+green(str(tgt.port))
+    print green("    |-> ")+tgt.patchStr
+    print "    "+green(str(total))+white(" exploits found")
+    bd=""
+    if tgt.port==0 then bd=yellow(" - ")+white("Bounces")+orange(":")+purple(str(tgt.bounces))
+    print "    "+white("Shells")+orange(":")+green(str(tgt.shells))+yellow(" - ")+white("Computers")+orange(":")+yellow(str(tgt.computers))+yellow(" - ")+white("Files")+orange(":")+red(str(tgt.files))+bd+yellow(" - ")+white("Unknown")+orange(":")+error(str(tgt.unknown))
+  end for
+  print ""
+  c=user_input(green("[Select target #, 'x' exit, '?' help] "))
+  if not c or lower(trim(c))=="x" then break
+  if trim(c)=="?" then
+    _showHelp()
+    continue
+  end if
+  sel=to_int(trim(c))
+  if not sel isa number or sel<1 or sel>len(allTargets) then
+    print red("[!] Invalid selection")
+    continue
+  end if
+  tgt=allTargets[sel-1]
+  while true
+  // List exploits for this target
+  print ""
+  print orange("--- Exploits for ")+white(tgt.ln)+orange(" on ")+yellow(tgt.lan+":"+str(tgt.port))+orange(" ---")
+  print grey(ljust("#",5))+grey(ljust("TYPE",12))+grey(ljust("USER",12))+grey(ljust("ADDRESS",14))+grey("VALUE")
+  for e in tgt.exploits
+    ei=__e_idx+1
+    if e.type=="shell" then tag=green(ljust("shell",12))
+    if e.type=="computer" then tag=yellow(ljust("computer",12))
+    if e.type=="file" then tag=red(ljust("file",12))
+    if e.type=="bounce" then tag=purple(ljust("bounce",12))
+    if e.type=="null" then tag=grey(ljust("null",12))
+    if e.type=="unknown" then tag=grey(ljust("unknown",12))
+    if e.user=="root" then
+      utag=green(ljust(e.user,12))
+    else if e.user=="guest" then
+      utag=red(ljust(e.user,12))
+    else if e.user!="" then
+      utag=yellow(ljust(e.user,12))
+    else
+      utag=grey(ljust("-",12))
+    end if
+    print white(ljust(str(ei),5))+tag+utag+blue(ljust(e.addr,14))+grey(e.val)
+  end for
+  print ""
+  c2=user_input(green("[Exploit #, 'b' back, 'x' exit, '?' help] "))
+  if not c2 or lower(trim(c2))=="b" then break
+  if trim(c2)=="?" then
+    _showHelp()
+    continue
+  end if
+  if lower(trim(c2))=="x" then
+    _exit=true
+    break
+  end if
+  esel=to_int(trim(c2))
+  if not esel isa number or esel<1 or esel>len(tgt.exploits) then
+    print red("[!] Invalid selection")
+    continue
+  end if
+  exploit=tgt.exploits[esel-1]
+  // Execute the exploit
+  if exploit.type=="bounce" then
+    bounceIP=user_input(orange("[Enter bounce target IP] "))
+    if not bounceIP or not is_valid_ip(trim(bounceIP)) then
+      print red("[!] Invalid IP")
+      continue
+    end if
+    ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(bounceIP))
+  else if exploit.type=="null" then
+    print grey("  This exploit returned null during scan.")
+    print grey("  It may be a password-change exploit.")
+    ans=user_input(green("[Try with new password? Enter password or 'b' to skip] "))
+    if not ans or lower(trim(ans))=="b" then continue
+    ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(ans))
+    if not ex then
+      print yellow("[i] Exploit returned null again")
+    else if ex isa string then
+      print red("[!] "+ex)
+    else
+      print green("[+] Password change may have succeeded!")
+    end if
+    continue
+  else
+    ex=overflow(tgt.lib,exploit.addr,exploit.val)
+  end if
+  obj=typeof(ex)
+  if obj=="shell" or obj=="ftpshell" then
+    print green("[+] Got shell!")
+    print orange("    User: ")+white(getUserEX(ex))
+    print orange("    Host: ")+white(host_computer(ex).public_ip)
+    _exploitMenu(ex,"shell")
+  else if obj=="computer" then
+    print green("[+] Got computer!")
+    print orange("    User: ")+white(getUserEX(ex))
+    print orange("    Host: ")+white(ex.public_ip)
+    _exploitMenu(ex,"computer")
+  else if obj=="file" then
+    print green("[+] Got file!")
+    print orange("    User: ")+white(getUserEX(ex))
+    print orange("    Path: ")+white(path(ex))
+    print orange("    Name: ")+white(name(ex))
+    _exploitMenu(ex,"file")
+  else if ex isa string then
+    print red("[!] "+ex)
+  else if not ex then
+    print yellow("[i] Exploit returned null (may need extra parameter)")
+  else
+    print yellow("[i] Result type: "+typeof(ex))
+  end if
+  end while
+  if _exit then break
+end while
