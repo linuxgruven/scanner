@@ -817,6 +817,15 @@ _exploitMenu=function(ex,exType)
         if not df then continue
         for f in get_files(df);push(apps,{"name":name(f),"dir":d});end for
       end for
+      hf=File(comp,"/home")
+      if hf then
+        for ud in get_folders(hf)
+          if name(ud)=="guest" then continue
+          for f in get_files(ud)
+            if name(f).indexOf(".exe")!=null then push(apps,{"name":name(f),"dir":path(ud)})
+          end for
+        end for
+      end if
       if apps then
         while true
           print ""
@@ -1255,6 +1264,15 @@ _countApps=function(ex)
     if not df then continue
     n=n+len(get_files(df))
   end for
+  hf=File(comp,"/home")
+  if hf then
+    for ud in get_folders(hf)
+      if name(ud)=="guest" then continue
+      for f in get_files(ud)
+        if name(f).indexOf(".exe")!=null then n=n+1
+      end for
+    end for
+  end if
   return n
 end function
 _mergeCreds=function(net,fresh)
