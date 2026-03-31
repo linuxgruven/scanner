@@ -488,13 +488,22 @@ localScan=function(remoteShell)
         ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(bounceIP))
       else if exploit.type=="null" then
         print grey("  This exploit returned null during scan.")
-        ans=user_input(green("[New password, or 'b' to skip] "))
+        ans=user_input(green("[Password or bounce IP, or 'b' to skip] "))
         if not ans or lower(trim(ans))=="b" then continue
         ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(ans))
         if not ex then
           prt("Exploit returned null again")
+          continue
         else if ex isa string then
           prt(ex,"e")
+          continue
+        end if
+        obj=typeof(ex)
+        if obj=="computer" then
+          prt("Got computer (bounce)!","s")
+          print orange("    User: ")+white(getUserEX(ex))
+          print orange("    Host: ")+white(ex.public_ip)
+          _exploitMenu(ex,"computer")
         else
           prt("Password change may have succeeded!","s")
         end if
@@ -513,12 +522,12 @@ localScan=function(remoteShell)
           print ""
           print orange("--- /etc/passwd ---")
           creds=printPasswd(passwd)
-          _mergeCreds(networkCreds,creds)
+          _mergeCreds(get_custom_object.networkCreds,creds)
         else
           prt("Cannot read /etc/passwd")
         end if
-        if networkCreds and getUserEX(ex)!="root" then
-          newShell=connectAs(networkCreds,ex)
+        if get_custom_object.networkCreds and getUserEX(ex)!="root" then
+          newShell=connectAs(get_custom_object.networkCreds,ex)
           if newShell then
             ex=newShell
             print orange("    User: ")+white(getUserEX(ex))
@@ -539,7 +548,7 @@ localScan=function(remoteShell)
           print ""
           print orange("--- /etc/passwd ---")
           creds=printPasswd(passwd)
-          _mergeCreds(networkCreds,creds)
+          _mergeCreds(get_custom_object.networkCreds,creds)
         else
           prt("Cannot read /etc/passwd")
         end if
@@ -558,7 +567,7 @@ localScan=function(remoteShell)
           print ""
           print orange("--- /etc/passwd ---")
           creds=printPasswd(passwd)
-          _mergeCreds(networkCreds,creds)
+          _mergeCreds(get_custom_object.networkCreds,creds)
         else
           prt("Cannot read /etc/passwd")
         end if
@@ -712,14 +721,15 @@ downloadFile=function(ex)
   print grey("  Files saved to ")+yellow(lHome+"/Downloads/")
   p=user_input(green("[remote path, or 'b'] "))
   if not p or lower(trim(p))=="b" then return
+  p=trim(p)
   target=null
   for f in getAllFiles(root)
-    if path(f)==trim(p) then
+    if path(f)==p then
       target=f
       break
     end if
   end for
-  if not target then return prt("File not found: "+trim(p),"e")
+  if not target then return prt("File not found: "+p,"e")
   if is_folder(target) then return prt("Cannot download a folder","e")
   if not has_permission(target,"r") then return prt("No read permission","e")
   dlDir=File(lComp,lHome+"/Downloads")
@@ -727,17 +737,23 @@ downloadFile=function(ex)
     r=create_folder(lComp,lHome,"Downloads")
     if r isa string then return prt(r,"e")
   end if
-  content=get_content(target)
-  if content==null then return prt("Cannot read file (binary?)","e")
-  fn=name(target)
-  existing=File(lComp,lHome+"/Downloads/"+fn)
-  if existing then fn=fn+"_"+str(floor(rnd*9999))
-  r=touch(lComp,lHome+"/Downloads",fn)
-  if r isa string then return prt(r,"e")
-  df=File(lComp,lHome+"/Downloads/"+fn)
-  if not df then return prt("Failed to create local file","e")
-  set_content(df,content)
-  prt("Downloaded "+name(target)+" -> "+lHome+"/Downloads/"+fn,"s")
+  if indexOf(typeof(ex),"shell")!=null then
+    r=scp(ex,p,lHome+"/Downloads",lShell)
+    if r isa string then return prt("SCP failed: "+r,"e")
+    prt("Downloaded "+name(target)+" -> "+lHome+"/Downloads/"+name(target),"s")
+  else
+    content=get_content(target)
+    if content==null then return prt("Cannot read file (binary, need shell for scp)","e")
+    fn=name(target)
+    existing=File(lComp,lHome+"/Downloads/"+fn)
+    if existing then fn=fn+"_"+str(floor(rnd*9999))
+    r=touch(lComp,lHome+"/Downloads",fn)
+    if r isa string then return prt(r,"e")
+    df=File(lComp,lHome+"/Downloads/"+fn)
+    if not df then return prt("Failed to create local file","e")
+    set_content(df,content)
+    prt("Downloaded "+name(target)+" -> "+lHome+"/Downloads/"+fn,"s")
+  end if
 end function
 uploadFile=function(ex)
   if indexOf(typeof(ex),"shell")==null then return prt("Need a shell to upload files","e")
@@ -760,6 +776,29 @@ uploadFile=function(ex)
   if r isa string then return prt("SCP failed: "+r,"e")
   prt("Uploaded "+name(src)+" -> "+dest+"/"+name(src),"s")
 end function
+renameFile=function(ex)
+  root=toRoot(ex)
+  if not root then return prt("Cannot resolve filesystem","e")
+  print ""
+  print grey("  Enter path of file/folder to rename")
+  p=user_input(green("[path, or 'b'] "))
+  if not p or lower(trim(p))=="b" then return
+  target=null
+  for f in getAllFiles(root)
+    if path(f)==trim(p) then
+      target=f
+      break
+    end if
+  end for
+  if not target then return prt("Not found: "+trim(p),"e")
+  if not has_permission(target,"w") then return prt("No write permission","e")
+  print grey("  Current name: ")+white(name(target))
+  nn=user_input(green("[new name, or 'b'] "))
+  if not nn or lower(trim(nn))=="b" then return
+  r=rename(target,trim(nn))
+  if r isa string then return prt(r,"e")
+  prt("Renamed -> "+trim(nn),"s")
+end function
 _exploitMenu=function(ex,exType)
   shell=null
   if exType=="shell" then shell=ex
@@ -767,7 +806,7 @@ _exploitMenu=function(ex,exType)
     print ""
     pCnt=_countPasswd(ex)
     print green("[c]")+grey(" Crack")+grey(" ("+str(pCnt)+" accounts)")
-    if shell and networkCreds and getUserEX(ex)!="root" then print green("[s]")+grey(" Su")+grey(" ("+str(len(networkCreds))+" cracked creds)")
+    if shell and get_custom_object.networkCreds and getUserEX(ex)!="root" then print green("[s]")+grey(" Su")+grey(" ("+str(len(get_custom_object.networkCreds))+" cracked creds)")
     if shell then
       aCnt=_countApps(shell)
       print green("[a]")+grey(" Apps")+grey(" ("+str(aCnt)+" available)")
@@ -776,10 +815,19 @@ _exploitMenu=function(ex,exType)
     end if
     print green("[f]")+grey(" Browse files")
     print green("[d]")+grey(" Download file")
+    print green("[r]")+grey(" Rename file")
     if shell then print green("[u]")+grey(" Upload file")
     if canWipeLog(ex) then print green("[w]")+grey(" Wipe log")
     print green("[b]")+grey(" Back")
-    ans=user_input(green("[action] "))
+    u=getUserEX(ex)
+    if exType=="shell" then
+      h=host_computer(ex).public_ip
+    else if exType=="computer" then
+      h=ex.public_ip
+    else
+      h=path(ex)
+    end if
+    ans=user_input(green("["+u+"@"+h+" "+exType+"] ")+">"+" ")
     if not ans or lower(trim(ans))=="b" then break
     ch=lower(trim(ans))
     if ch=="c" then
@@ -788,13 +836,13 @@ _exploitMenu=function(ex,exType)
         print ""
         print orange("--- /etc/passwd ---")
         creds=printPasswd(passwd)
-        _mergeCreds(networkCreds,creds)
+        _mergeCreds(get_custom_object.networkCreds,creds)
       else
         prt("Cannot read /etc/passwd")
       end if
     else if ch=="s" then
-      if networkCreds and getUserEX(ex)!="root" then
-        newShell=connectAs(networkCreds,ex)
+      if get_custom_object.networkCreds and getUserEX(ex)!="root" then
+        newShell=connectAs(get_custom_object.networkCreds,ex)
         if newShell then
           ex=newShell
           shell=newShell
@@ -886,6 +934,8 @@ _exploitMenu=function(ex,exType)
       browseFiles(ex)
     else if ch=="d" then
       downloadFile(ex)
+    else if ch=="r" then
+      renameFile(ex)
     else if ch=="u" then
       if not shell then
         prt("Need a shell to upload")
@@ -1198,13 +1248,22 @@ scanLAN=function(remoteShell)
           ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(bounceIP))
         else if exploit.type=="null" then
           print grey("  This exploit returned null during scan.")
-          ans=user_input(green("[New password, or 'b' to skip] "))
+          ans=user_input(green("[Password or bounce IP, or 'b' to skip] "))
           if not ans or lower(trim(ans))=="b" then continue
           ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(ans))
           if not ex then
             prt("Exploit returned null again")
+            continue
           else if ex isa string then
             prt(ex,"e")
+            continue
+          end if
+          obj=typeof(ex)
+          if obj=="computer" then
+            prt("Got computer (bounce)!","s")
+            print orange("    User: ")+white(getUserEX(ex))
+            print orange("    Host: ")+white(ex.public_ip)
+            _exploitMenu(ex,"computer")
           else
             prt("Password change may have succeeded!","s")
           end if
@@ -1304,6 +1363,7 @@ _showHelp=function
   print "  "+green("n")+"        LAN scan (map + exploit LAN devices)"
   print "  "+green("f")+"        Browse remote filesystem"
   print "  "+green("d")+"        Download file from remote"
+  print "  "+green("r")+"        Rename file/folder on remote"
   print "  "+green("u")+"        Upload file to remote (shell only)"
   print "  "+green("w")+"        Wipe system.log"
   print ""
@@ -1332,34 +1392,9 @@ end function
 // ============================================================================
 // ARGUMENT PARSING
 // ============================================================================
-if not params or len(params)==0 then
-  print green("================================================================")
-  print white("              "+yellow("Scanner")+" - Port & Exploit Scanner")
-  print green("================================================================")
-  print ""
-  print white("Usage:")
-  print "  scanner <ip>       Scan target IP"
-  print "  scanner -r         Scan random IP"
-  print ""
-  print white("Options:")
-  print "  -q                       Quick mode (ports only, no exploits)"
-  print ""
-  print white("Controls:")
-  print "  #        Select target or exploit by number"
-  print "  b        Go back to previous menu"
-  print "  x        Exit scanner"
-  print ""
-  print white("Tips:")
-  print "  Root password works across the whole network."
-  print "  Shell exploits offer local LAN scanning (uploads metaxploit)."
-  print ""
-  print white("Examples:")
-  print "  scanner 44.204.236.24"
-  print "  scanner -r"
-  print "  scanner -r -q"
-  print green("================================================================")
-  exit
-end if
+// ============================================================================
+// INIT
+// ============================================================================
 metax=include_lib("/lib/metaxploit.so")
 if metax then
   metaxPath="/lib/metaxploit.so"
@@ -1376,6 +1411,7 @@ get_custom_object.metaxPath=metaxPath
 localShell=get_shell
 get_custom_object.localShell=localShell
 get_custom_object.metas={}
+get_custom_object.networkCreds=[]
 homeLIP=host_computer(localShell).local_ip
 if homeLIP then get_custom_object.metas[homeLIP]=metax
 quickMode=false
@@ -1389,20 +1425,26 @@ for arg in params
     if not targetIP then targetIP=arg
   end if
 end for
-if not targetIP then exit(red("[!] No target specified"))
-if not is_valid_ip(targetIP) then exit(red("[!] Invalid IP: "+targetIP))
+_scanTarget=function(targetIP)
+// Clear state from previous scan
+get_custom_object.metas={}
+get_custom_object.metas[homeLIP]=metax
+get_custom_object.meta_local=null
+if hasIndex(get_custom_object,"packRootShell") then get_custom_object.packRootShell=null
+if hasIndex(get_custom_object,"scanlan_result") then get_custom_object.scanlan_result=null
+get_custom_object.networkCreds=[]
 // ============================================================================
 // SCAN TARGET
 // ============================================================================
 router=get_router(targetIP)
-if not router then exit(red("[!] No route to "+targetIP))
+if not router then return prt("No route to "+targetIP,"e")
 print ""
 print liteGrey("Scanner v1.0 — "+current_date)
 print liteGrey("Target: "+targetIP)
 print ""
 // Gather ports
 ports=[0]+used_ports(router)
-if len(ports)>1 and typeof(ports[1])=="string" then exit(red("[!] "+ports[1]))
+if len(ports)>1 and typeof(ports[1])=="string" then return prt(ports[1],"e")
 // Display port table
 portTable=[]
 portHeader=grey(ljust("PORT",8))+grey(ljust("STATE",9))+grey(ljust("SERVICE",14))+grey(ljust("VERSION",11))+grey("LAN")
@@ -1430,7 +1472,7 @@ for port in ports
   print row
 end for
 print ""
-if quickMode then exit
+if quickMode then return
 // ============================================================================
 // EXPLOIT SCAN
 // ============================================================================
@@ -1530,12 +1572,12 @@ for port in ports
 end for
 if not allTargets then
   prt("No exploitable services found")
-  exit
+  return
 end if
 // ============================================================================
 // INTERACTIVE MENU
 // ============================================================================
-networkCreds=[]
+get_custom_object.networkCreds=[]
 _exit=false
 while true
   print ""
@@ -1619,13 +1661,22 @@ while true
     else if exploit.type=="null" then
       print grey("  This exploit returned null during scan.")
       print grey("  It may be a password-change exploit.")
-      ans=user_input(green("[Try with new password? Enter password or 'b' to skip] "))
+      ans=user_input(green("[Password or bounce IP, or 'b' to skip] "))
       if not ans or lower(trim(ans))=="b" then continue
       ex=overflow(tgt.lib,exploit.addr,exploit.val,trim(ans))
       if not ex then
         prt("Exploit returned null again")
+        continue
       else if ex isa string then
         prt(ex,"e")
+        continue
+      end if
+      obj=typeof(ex)
+      if obj=="computer" then
+        prt("Got computer (bounce)!","s")
+        print orange("    User: ")+white(getUserEX(ex))
+        print orange("    Host: ")+white(ex.public_ip)
+        _exploitMenu(ex,"computer")
       else
         prt("Password change may have succeeded!","s")
       end if
@@ -1659,4 +1710,53 @@ while true
     end if
   end while
   if _exit then break
+end while
+end function
+// ============================================================================
+// RUN LOOP
+// ============================================================================
+if targetIP then
+  if not is_valid_ip(targetIP) then
+    resolved=nslookup(targetIP)
+    if not resolved then exit(red("[!] Cannot resolve: "+targetIP))
+    targetIP=resolved
+  end if
+  _scanTarget(targetIP)
+  if quickMode then exit
+end if
+while true
+  print ""
+  print green("================================================================")
+  print white("              "+yellow("Scanner")+" - Port & Exploit Scanner")
+  print green("================================================================")
+  print ""
+  print green("[ip]")+grey(" Scan target IP or domain")
+  print green("[r]")+grey("  Scan random IP")
+  print green("[?]")+grey("  Help")
+  print green("[x]")+grey("  Exit")
+  print ""
+  inp=user_input(green("[target] > "))
+  if not inp or lower(trim(inp))=="x" then break
+  inp=trim(inp)
+  if inp=="?" then
+    _showHelp()
+    continue
+  end if
+  if lower(inp)=="r" then
+    ip=getRandomIP()
+    if not ip then
+      prt("Failed to get random IP","e")
+      continue
+    end if
+  else if is_valid_ip(inp) then
+    ip=inp
+  else
+    ip=nslookup(inp)
+    if not ip then
+      prt("Cannot resolve: "+inp,"e")
+      continue
+    end if
+    prt(inp+" -> "+ip,"s")
+  end if
+  _scanTarget(ip)
 end while
