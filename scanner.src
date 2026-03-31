@@ -819,8 +819,7 @@ renameFile=function(ex)
   nn=user_input(green("[new name, or 'b'] > "))
   if not nn or lower(trim(nn))=="b" then return
   r=rename(target,trim(nn))
-  if r isa string then return prt(r,"e")
-  prt("Renamed -> "+trim(nn),"s")
+  if r=="" then prt("Renamed -> "+trim(nn),"s") else prt(str(r),"e")
 end function
 _exploitMenu=function(ex,exType)
   shell=null
