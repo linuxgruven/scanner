@@ -549,10 +549,52 @@ localScan=function(remoteShell)
           print white(ljust(str(ei),5))+tag+utag+blue(ljust(e.addr,14))+grey(e.val)
         end for
         print ""
-        c2=user_input(green("[Exploit #, 'b' back, '?' help] > "))
+        c2=user_input(green("[Exploit #, 'ba' bounce all, 'b' back, '?' help] > "))
         if not c2 or lower(trim(c2))=="b" then break
         if trim(c2)=="?" then
           _showHelp
+          continue
+        end if
+        if lower(trim(c2))=="ba" then
+          bip=user_input(orange("[Bounce target IP] > "))
+          if not bip or not is_valid_ip(trim(bip)) then
+            prt("Invalid IP","e")
+            continue
+          end if
+          bip=trim(bip)
+          for ne in tgt.exploits
+            if ne.type!="null" then continue
+            prt("Trying "+ne.addr+" "+ne.val+" -> "+bip)
+            ex=overflow(tgt.lib,ne.addr,ne.val,bip)
+            if not ex then
+              print grey("    null")
+              continue
+            end if
+            if ex isa string then
+              print grey("    "+ex)
+              continue
+            end if
+            obj=typeof(ex)
+            if obj=="shell" or obj=="ftpshell" then
+              prt("Got shell!","s")
+              print orange("    User: ")+white(getUserEX(ex))
+              print orange("    Host: ")+white(host_computer(ex).public_ip)
+              _exploitMenu(ex,"shell")
+            else if obj=="computer" then
+              prt("Got computer!","s")
+              print orange("    User: ")+white(getUserEX(ex))
+              print orange("    Host: ")+white(ex.public_ip)
+              _exploitMenu(ex,"computer")
+            else if obj=="file" then
+              prt("Got file!","s")
+              print orange("    User: ")+white(getUserEX(ex))
+              print orange("    Path: ")+white(path(ex))
+              print orange("    Name: ")+white(name(ex))
+              _exploitMenu(ex,"file")
+            else
+              prt("Result type: "+typeof(ex))
+            end if
+          end for
           continue
         end if
         esel=to_int(trim(c2))
@@ -1268,11 +1310,53 @@ scanLAN=function(remoteShell)
           print white(ljust(str(ei),5))+tag+utag+blue(ljust(e.addr,14))+grey(e.val)
         end for
         print ""
-        c3=user_input(green("[Exploit #, 'b' back, 'x' exit] > "))
+        c3=user_input(green("[Exploit #, 'ba' bounce all, 'b' back, 'x' exit] > "))
         if not c3 or lower(trim(c3))=="b" then break
         if lower(trim(c3))=="x" then
           dExit=true
           break
+        end if
+        if lower(trim(c3))=="ba" then
+          bip=user_input(orange("[Bounce target IP] > "))
+          if not bip or not is_valid_ip(trim(bip)) then
+            prt("Invalid IP","e")
+            continue
+          end if
+          bip=trim(bip)
+          for ne in tgt.exploits
+            if ne.type!="null" then continue
+            prt("Trying "+ne.addr+" "+ne.val+" -> "+bip)
+            ex=overflow(tgt.lib,ne.addr,ne.val,bip)
+            if not ex then
+              print grey("    null")
+              continue
+            end if
+            if ex isa string then
+              print grey("    "+ex)
+              continue
+            end if
+            obj=typeof(ex)
+            if obj=="shell" or obj=="ftpshell" then
+              prt("Got shell!","s")
+              print orange("    User: ")+white(getUserEX(ex))
+              print orange("    Host: ")+white(host_computer(ex).public_ip)
+              _exploitMenu(ex,"shell")
+            else if obj=="computer" then
+              prt("Got computer!","s")
+              print orange("    User: ")+white(getUserEX(ex))
+              print orange("    Host: ")+white(ex.public_ip)
+              _exploitMenu(ex,"computer")
+            else if obj=="file" then
+              prt("Got file!","s")
+              print orange("    User: ")+white(getUserEX(ex))
+              print orange("    Path: ")+white(path(ex))
+              print orange("    Name: ")+white(name(ex))
+              _exploitMenu(ex,"file")
+            else
+              prt("Result type: "+typeof(ex))
+            end if
+          end for
+          continue
         end if
         esel=to_int(trim(c3))
         if not esel isa number or esel<1 or esel>len(tgt.exploits) then
@@ -1431,9 +1515,6 @@ getRandomIP=function
     return ip
   end while
 end function
-// ============================================================================
-// ARGUMENT PARSING
-// ============================================================================
 // ============================================================================
 // INIT
 // ============================================================================
@@ -1747,10 +1828,52 @@ while true
         print white(ljust(str(ei),5))+tag+utag+blue(ljust(e.addr,14))+grey(e.val)
       end for
       print ""
-      c2=user_input(green("[Exploit #, 'b' back, '?' help] > "))
+      c2=user_input(green("[Exploit #, 'ba' bounce all, 'b' back, '?' help] > "))
       if not c2 or lower(trim(c2))=="b" then break
       if trim(c2)=="?" then
         _showHelp
+        continue
+      end if
+      if lower(trim(c2))=="ba" then
+        bip=user_input(orange("[Bounce target IP] > "))
+        if not bip or not is_valid_ip(trim(bip)) then
+          prt("Invalid IP","e")
+          continue
+        end if
+        bip=trim(bip)
+        for ne in tgt.exploits
+          if ne.type!="null" then continue
+          prt("Trying "+ne.addr+" "+ne.val+" -> "+bip)
+          ex=overflow(tgt.lib,ne.addr,ne.val,bip)
+          if not ex then
+            print grey("    null")
+            continue
+          end if
+          if ex isa string then
+            print grey("    "+ex)
+            continue
+          end if
+          obj=typeof(ex)
+          if obj=="shell" or obj=="ftpshell" then
+            prt("Got shell!","s")
+            print orange("    User: ")+white(getUserEX(ex))
+            print orange("    Host: ")+white(host_computer(ex).public_ip)
+            _exploitMenu(ex,"shell")
+          else if obj=="computer" then
+            prt("Got computer!","s")
+            print orange("    User: ")+white(getUserEX(ex))
+            print orange("    Host: ")+white(ex.public_ip)
+            _exploitMenu(ex,"computer")
+          else if obj=="file" then
+            prt("Got file!","s")
+            print orange("    User: ")+white(getUserEX(ex))
+            print orange("    Path: ")+white(path(ex))
+            print orange("    Name: ")+white(name(ex))
+            _exploitMenu(ex,"file")
+          else
+            prt("Result type: "+typeof(ex))
+          end if
+        end for
         continue
       end if
       esel=to_int(trim(c2))
