@@ -21,6 +21,7 @@ A lightweight, interactive port scanner and exploit tester for Grey Hack. Scans 
   - [LAN Network Scan](#n-lan-network-scan)
   - [File Browser](#f-file-browser)
   - [Download / Upload Files](#d-download--u-upload)
+  - [Add Password](#p-add-password)
   - [Rename Files](#r-rename)
   - [Wipe Log](#w-wipe-log)
 - [Bouncing](#bouncing)
@@ -135,6 +136,7 @@ After successfully exploiting a target, you get an interactive menu. Available o
 [d] Download file
 [r] Rename file
 [u] Upload file
+[p] Add password to cache
 [w] Wipe log
 [b] Back
 ```
@@ -218,6 +220,10 @@ Enter a remote file path to download it to your local `~/Downloads/` folder.
 *(Shell exploits only)*
 
 Upload a local file to the remote machine. Prompts for local path and optional destination directory.
+
+### `p` — Add Password
+
+Manually add a root password to the credential cache. Useful when you already know the password (e.g., from a previous session or a password-change exploit) and want to use `s` (su) without cracking.
 
 ### `r` — Rename
 
