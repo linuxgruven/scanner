@@ -894,6 +894,7 @@ _exploitMenu=function(ex,exType)
     print green("[d]")+grey(" Download file")
     print green("[r]")+grey(" Rename file")
     if shell then print green("[u]")+grey(" Upload file")
+    if shell then print green("[p]")+grey(" Add root password")
     if canWipeLog(ex) then print green("[w]")+grey(" Wipe log")
     print green("[b]")+grey(" Back")
     u=getUserEX(ex)
@@ -1019,6 +1020,32 @@ _exploitMenu=function(ex,exType)
         continue
       end if
       uploadFile(shell)
+    else if ch=="p" then
+      if not shell then
+        prt("Need a shell to add password")
+        continue
+      end if
+      comp=host_computer(shell)
+      u=getUserEX(shell)
+      newPass=user_input(green("[Enter password for root] > "))
+      if not newPass or not len(trim(newPass)) then
+        prt("Cancelled")
+        continue
+      end if
+      newPass=trim(newPass)
+      if u=="root" then
+        r=create_user(comp,"root",newPass)
+        if r==1 or r==true then
+          prt("Root password set to: "+newPass,"s")
+        else if r isa string then
+          prt(r,"e")
+        else
+          prt("Failed to set root password","e")
+        end if
+      else
+        prt("Must be root to change root password","e")
+        prt("Try cracking + su first")
+      end if
     else if ch=="w" then
       if canWipeLog(ex) then wipeLog(ex) else prt("No write permission to system.log")
     else
@@ -1491,6 +1518,7 @@ _showHelp=function
   print "  "+green("d")+"        Download file from remote"
   print "  "+green("r")+"        Rename file/folder on remote"
   print "  "+green("u")+"        Upload file to remote (shell only)"
+  print "  "+green("p")+"        Add/change root password (root shell only)"
   print "  "+green("w")+"        Wipe system.log"
   print ""
   print white("Tips:")
