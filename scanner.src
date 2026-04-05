@@ -374,7 +374,12 @@ localScan=function(remoteShell)
       end for
     end if
     print ""
-    c=user_input(green("[Lib #, 'a' scan all, 'b' back, '?' help] > "))
+    if len(libList)==1 and not lTargets then
+      prt("Single library, auto-scanning...")
+      c="a"
+    else
+      c=user_input(green("[Lib #, 'a' scan all, 'b' back, '?' help] > "))
+    end if
     if not c or lower(trim(c))=="b" then break
     if trim(c)=="?" then
       _showHelp
@@ -488,6 +493,7 @@ localScan=function(remoteShell)
     end if
     if not lTargets then
       prt("No exploitable libraries found")
+      if len(libList)==1 then break
       continue
     end if
     // Target selection
@@ -896,6 +902,7 @@ _exploitMenu=function(ex,exType)
     if shell then print green("[u]")+grey(" Upload file")
     print green("[p]")+grey(" Add password to cache")
     if canWipeLog(ex) then print green("[w]")+grey(" Wipe log")
+    print green("[i]")+grey(" Whois lookup")
     print green("[b]")+grey(" Back")
     u=getUserEX(ex)
     if exType=="shell" then
@@ -1025,6 +1032,20 @@ _exploitMenu=function(ex,exType)
       if pw and len(trim(pw)) then push(get_custom_object.networkCreds,{"user":"root","pass":trim(pw)});prt("Added root:"+trim(pw)+" to cache","s")
     else if ch=="w" then
       if canWipeLog(ex) then wipeLog(ex) else prt("No write permission to system.log")
+    else if ch=="i" then
+      if exType=="shell" then
+        wIP=host_computer(ex).public_ip
+      else if exType=="computer" then
+        wIP=ex.public_ip
+      else
+        wIP=null
+      end if
+      wTarget=user_input(green("[whois target"+((wIP!=null)*(" ["+wIP+"]"))+"] > "))
+      if not wTarget or not len(trim(wTarget)) then
+        if wIP then _whois(wIP) else prt("No target specified","e")
+      else
+        _whois(trim(wTarget))
+      end if
     else
       prt("Unknown action","e")
     end if
@@ -1160,102 +1181,163 @@ scanLAN=function(remoteShell)
       continue
     end if
     dev=devList[sel-1]
-    // Show ports for this device
-    print ""
-    print orange("--- Ports on ")+yellow(dev.ip)+orange(" (")+blue(dev.type)+orange(") ---")
-    print grey(ljust("PORT",8))+grey(ljust("STATE",9))+grey(ljust("SERVICE",14))+grey(ljust("VERSION",11))+grey("LAN")
-    for pt in dev.ports
-      if pt.st=="open" then state=green(ljust("open",9)) else state=red(ljust("closed",9))
-      print green(ljust(str(pt.pn),8))+state+blue(ljust(pt.svc,14))+blue(ljust(pt.ver,11))+lime(pt.lip)
-    end for
-    // Scan exploits on this device's ports
-    print ""
-    prt("Scanning "+dev.ip+" for exploits...")
-    print ""
+    // Port selection & exploit scan for this device
     dTargets=[]
-    for pt in dev.ports
-      if pt.st=="closed" then continue
-      session=net_use(rMetax,pt.lip,pt.pn)
-      if not session then continue
-      lib=dump_lib(session)
-      if not lib then continue
-      ln=lib_name(lib)
-      ver=version(lib)
-      addresses=scan(hMetax,lib)
-      if not addresses then continue
-      exploits=[]
-      for addr in addresses
-        vulnInfo=scan_address(hMetax,lib,addr)
-        if not vulnInfo then continue
-        for line in split(vulnInfo,char(10))
-          if indexOf(line,"Unsafe check")==0 then
-            s=indexOf(line,"<b>")+3
-            d2=indexOf(line,"</b>")
-            if s>2 and d2!=null then
-              unsecured=line[s:d2]
-              push(exploits,{"addr":addr,"val":unsecured})
-            end if
+    dExit=false
+    while true
+      print ""
+      print orange("--- Ports on ")+yellow(dev.ip)+orange(" (")+blue(dev.type)+orange(") ---")
+      print grey(ljust("PORT",8))+grey(ljust("STATE",9))+grey(ljust("SERVICE",14))+grey(ljust("VERSION",11))+grey("LAN")
+      for pt in dev.ports
+        if pt.st=="open" then state=green(ljust("open",9)) else state=red(ljust("closed",9))
+        print green(ljust(str(pt.pn),8))+state+blue(ljust(pt.svc,14))+blue(ljust(pt.ver,11))+lime(pt.lip)
+      end for
+      if dTargets then
+        print ""
+        prt("Previously scanned:")
+        for tgt in dTargets
+          i=__tgt_idx+1
+          total=tgt.shells+tgt.computers+tgt.files+tgt.bounces+tgt.unknown
+          t=purple("[")+white(str(i))+purple("] ")+yellow("• ")+orange(tgt.ln)+white(" ("+tgt.ver+") ")
+          print t+blue("-> ")+yellow(tgt.lan)+white(":")+green(str(tgt.port))
+          bd=""
+          if tgt.port==0 then bd=yellow(" - ")+white("Bounces")+orange(":")+purple(str(tgt.bounces))
+          print "    "+white("Sh")+orange(":")+green(str(tgt.shells))+yellow(" - ")+white("Co")+orange(":")+yellow(str(tgt.computers))+yellow(" - ")+white("Fi")+orange(":")+red(str(tgt.files))+bd+yellow(" - ")+white("Un")+orange(":")+error(str(tgt.unknown))
+        end for
+      end if
+      print ""
+      if len(dev.ports)==1 and not dTargets then
+        prt("Single port, auto-scanning...")
+        pc="a"
+      else
+        pc=user_input(green("[Port #, 'a' scan all, 'b' back] > "))
+      end if
+      if not pc or lower(trim(pc))=="b" then break
+      scanPts=[]
+      if lower(trim(pc))=="a" then
+        scanPts=dev.ports
+      else
+        psel=to_int(trim(pc))
+        if not psel isa number then
+          prt("Invalid selection","e")
+          continue
+        end if
+        found=false
+        for pt in dev.ports
+          if pt.pn==psel then
+            push(scanPts,pt)
+            found=true
+            break
           end if
         end for
-      end for
-      if not exploits then continue
-      p=is_patched(lib,1)
-      if p isa string then
-        patchStr=green("Patched To: "+p)
-      else if p==1 then
-        patchStr=green("Patched")
-      else
-        patchStr=red("Not Patched")
-      end if
-      shells=0
-      computers=0
-      files=0
-      bounces=0
-      unknown=0
-      classified=[]
-      for e in exploits
-        ex=overflow(lib,e.addr,e.val)
-        obj=typeof(ex)
-        etype="unknown"
-        euser=""
-        if obj=="shell" or obj=="ftpshell" then
-          shells=shells+1
-          etype="shell"
-          euser=getUserEX(ex)
-        else if obj=="computer" then
-          if ln=="kernel_router.so" then
-            bounces=bounces+1
-            etype="bounce"
-          else
-            computers=computers+1
-            etype="computer"
-            euser=getUserEX(ex)
-          end if
-        else if obj=="file" then
-          files=files+1
-          etype="file"
-          euser=getUserEX(ex)
-        else if not ex then
-          if ln=="kernel_router.so" then
-            bounces=bounces+1
-            etype="bounce"
-          else
-            unknown=unknown+1
-            etype="null"
-          end if
-        else
-          unknown=unknown+1
+        if not found then
+          prt("Port not found: "+str(psel),"e")
+          continue
         end if
-        push(classified,{"addr":e.addr,"val":e.val,"type":etype,"user":euser})
+      end if
+      // Filter already-scanned ports
+      newPts=[]
+      for pt in scanPts
+        already=false
+        for tgt in dTargets
+          if tgt.port==pt.pn then
+            already=true
+            break
+          end if
+        end for
+        if not already then push(newPts,pt)
       end for
-      push(dTargets,{"lib":lib,"ln":ln,"ver":ver,"lan":pt.lip,"port":pt.pn,"exploits":classified,"patchStr":patchStr,"shells":shells,"computers":computers,"files":files,"bounces":bounces,"unknown":unknown})
-    end for
-    if not dTargets then
-      prt("No exploitable services on "+dev.ip)
-      continue
-    end if
-    // Interactive exploit menu for this device
-    dExit=false
+      if not newPts then
+        ans=user_input(yellow("[!] Already scanned. Rescan? (y/N) "))
+        if ans and lower(trim(ans))=="y" then newPts=scanPts
+      end if
+      if newPts then
+        prt("Scanning "+str(len(newPts))+" ports for exploits...")
+        print ""
+        for pt in newPts
+          if pt.st=="closed" then continue
+          session=net_use(rMetax,pt.lip,pt.pn)
+          if not session then continue
+          lib=dump_lib(session)
+          if not lib then continue
+          ln=lib_name(lib)
+          ver=version(lib)
+          addresses=scan(hMetax,lib)
+          if not addresses then continue
+          exploits=[]
+          for addr in addresses
+            vulnInfo=scan_address(hMetax,lib,addr)
+            if not vulnInfo then continue
+            for line in split(vulnInfo,char(10))
+              if indexOf(line,"Unsafe check")==0 then
+                s=indexOf(line,"<b>")+3
+                d2=indexOf(line,"</b>")
+                if s>2 and d2!=null then
+                  unsecured=line[s:d2]
+                  push(exploits,{"addr":addr,"val":unsecured})
+                end if
+              end if
+            end for
+          end for
+          if not exploits then continue
+          p=is_patched(lib,1)
+          if p isa string then
+            patchStr=green("Patched To: "+p)
+          else if p==1 then
+            patchStr=green("Patched")
+          else
+            patchStr=red("Not Patched")
+          end if
+          shells=0
+          computers=0
+          files=0
+          bounces=0
+          unknown=0
+          classified=[]
+          for e in exploits
+            ex=overflow(lib,e.addr,e.val)
+            obj=typeof(ex)
+            etype="unknown"
+            euser=""
+            if obj=="shell" or obj=="ftpshell" then
+              shells=shells+1
+              etype="shell"
+              euser=getUserEX(ex)
+            else if obj=="computer" then
+              if ln=="kernel_router.so" then
+                bounces=bounces+1
+                etype="bounce"
+              else
+                computers=computers+1
+                etype="computer"
+                euser=getUserEX(ex)
+              end if
+            else if obj=="file" then
+              files=files+1
+              etype="file"
+              euser=getUserEX(ex)
+            else if not ex then
+              if ln=="kernel_router.so" then
+                bounces=bounces+1
+                etype="bounce"
+              else
+                unknown=unknown+1
+                etype="null"
+              end if
+            else
+              unknown=unknown+1
+            end if
+            push(classified,{"addr":e.addr,"val":e.val,"type":etype,"user":euser})
+          end for
+          push(dTargets,{"lib":lib,"ln":ln,"ver":ver,"lan":pt.lip,"port":pt.pn,"exploits":classified,"patchStr":patchStr,"shells":shells,"computers":computers,"files":files,"bounces":bounces,"unknown":unknown})
+        end for
+      end if
+      if not dTargets then
+        prt("No exploitable services found")
+        if len(dev.ports)==1 then break
+        continue
+      end if
+      // Interactive exploit menu for this device
     while true
       print ""
       print orange("--- Attack vectors on ")+yellow(dev.ip)+orange(" ---")
@@ -1428,6 +1510,8 @@ scanLAN=function(remoteShell)
       end while
       if dExit then break
     end while
+    if dExit then break
+    end while
   end while
 end function
 _countPasswd=function(ex)
@@ -1473,6 +1557,48 @@ _mergeCreds=function(net,fresh)
     if not dup then push(net,cr)
   end for
 end function
+_whois=function(target)
+  if not target then return prt("Usage: whois <ip or domain>","e")
+  if target[:3]=="www" then
+    target=nslookup(target)
+    if target=="Not found" then return prt("Invalid web address","e")
+  end if
+  if not is_valid_ip(target) then
+    resolved=nslookup(target)
+    if not resolved then return prt("Cannot resolve: "+target,"e")
+    target=resolved
+  end if
+  router=get_router(target)
+  if not router then return prt("No route to "+target,"e")
+  info={}
+  info.BSSID=bssid_name(router)
+  info.ESSID=essid_name(router)
+  whoisData=whois(target)
+  if indexOf(whoisData,"Domain name")==null then return prt(whoisData,"e")
+  whoisData=whoisData.replace("Domain name: ","")
+  whoisData=whoisData.replace("Administrative contact: ","")
+  whoisData=whoisData.replace("Email address: ","")
+  whoisData=whoisData.replace("Phone: ","")
+  lines=split(whoisData,char(10))
+  info.web=lines[0]
+  info.ip=target
+  info.domain=lines[0].replace("www.","")
+  info.email=lines[2]
+  info.admin=lines[1]
+  info.phone=lines[3]
+  info.company=split(info.web,"\.")[1]
+  print ""
+  if info.BSSID then print blue("BSSID ------------ : ")+yellow(info.BSSID)
+  if info.ESSID then print blue("ESSID ------------ : ")+yellow(info.ESSID)
+  print blue("COMPANY PUBLIC IP  : ")+yellow(info.ip)
+  print blue("COMPANY WEBSITE -- : ")+yellow(info.web)
+  print blue("COMPANY DOMAIN --- : ")+yellow(info.domain)
+  print blue("COMPANY NAME ----- : ")+yellow(info.company)
+  print blue("ADMIN NAME ------- : ")+yellow(info.admin)
+  print blue("ADMIN EMAIL ------ : ")+yellow(info.email)
+  print blue("ADMIN PHONE ------ : ")+yellow(info.phone)
+  print ""
+end function
 _showHelp=function
   print ""
   print green("================================================================")
@@ -1496,6 +1622,7 @@ _showHelp=function
   print "  "+green("r")+"        Rename file/folder on remote"
   print "  "+green("u")+"        Upload file to remote (shell only)"
   print "  "+green("w")+"        Wipe system.log"
+  print "  "+green("i")+"        Whois lookup"
   print ""
   print white("Tips:")
   print "  Root password works across the whole network."
@@ -1622,7 +1749,12 @@ while true
     end for
   end if
   print ""
-  c=user_input(green("[Port #, 'a' scan all, 'b' back, '?' help] > "))
+  if len(ports)==1 and not allTargets then
+    prt("Single port, auto-scanning...")
+    c="a"
+  else
+    c=user_input(green("[Port #, 'a' scan all, 'b' back, '?' help] > "))
+  end if
   if not c or lower(trim(c))=="b" then break
   if trim(c)=="?" then
     _showHelp
@@ -1765,6 +1897,7 @@ while true
   end if
   if not allTargets then
     prt("No exploitable services found")
+    if len(ports)==1 then break
     continue
   end if
   // ============================================================================
@@ -1968,6 +2101,7 @@ while true
   print ""
   print green("[ip]")+grey(" Scan target IP or domain")
   print green("[r]")+grey("  Scan random IP")
+  print green("[w]")+grey("  Whois lookup")
   print green("[?]")+grey("  Help")
   print green("[x]")+grey("  Exit")
   print ""
@@ -1977,6 +2111,11 @@ while true
   if lower(inp)=="x" then break
   if inp=="?" then
     _showHelp
+    continue
+  end if
+  if lower(inp)=="w" then
+    wTarget=user_input(green("[whois target] > "))
+    if wTarget then _whois(trim(wTarget))
     continue
   end if
   if lower(inp)=="r" then
