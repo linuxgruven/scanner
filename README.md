@@ -1,6 +1,6 @@
 # Scanner — Port & Exploit Scanner
 
-A lightweight, interactive port scanner and exploit tester for Grey Hack. Scans target IPs, discovers vulnerabilities via metaxploit, classifies exploit results, and provides post-exploitation tools — all from a single script.
+A lightweight, interactive port scanner and exploit tester for Grey Hack. Scans target IPs, discovers vulnerabilities via metaxploit, classifies exploit results, and provides post-exploitation tools — all from a single script. The goal of this project is to pack the most bang into a single file.
 
 ---
 
